@@ -25,6 +25,7 @@ pub struct State {
     config: wgpu::SurfaceConfiguration,
     is_surface_configured: bool,
     window: Arc<Window>,
+    render_pipeline: wgpu::RenderPipeline,
 }
 
 
@@ -164,9 +165,70 @@ impl State {
         };
 
 
-        let modes = &surface_caps.present_modes;
+        let shader = device.create_shader_module( //wgpu::include_wgsl!("shader.wgsl")
+                wgpu::ShaderModuleDescriptor{
+                    label: Some("Shader"),
+                    source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+                });
 
-        Ok(Self {surface, device, queue, config, is_surface_configured: false, window, })
+        let render_pipeline_layout = 
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { 
+                label: Some("Render Pipeline Layout"),
+                bind_group_layouts: &[],
+                immediate_size: 0,
+            });
+
+        // struct docs can be found in wgpu::RenderPipelineDescriptor for v 29.3.0
+        // this really just describes the wgsl files I wrote just a bit ago
+        // this is why we had those @vertex and @fragment
+        // buffers are also handled in those files so we leave them blank here.
+        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { 
+            label: Some("Render Pipeline"),
+            layout: Some(&render_pipeline_layout),
+            vertex: wgpu::VertexState { 
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers:  &[],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader, 
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            // the primitive describes how I want the program to interpret the vertices 
+            // triangle list means every three vertices corresponds to one triangle !note this 4 IO
+            // ccw describes which way wgpu will determine the triangle is facing based on the
+            // relationship between the points
+            //
+            // Throwback: triangles that are not facing forward are not rendered 
+            // NCOT Technology has a very intriguing video on this topic that applies here.
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None, 
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: Some(wgpu::Face::Back),
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false, 
+                conservative: false,
+            },
+            depth_stencil: None, 
+            multisample: wgpu::MultisampleState {
+                count: 1, 
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview_mask: None,
+            cache: None,
+        });
+
+            
+        Ok(Self {surface, device, queue, config, is_surface_configured: false, window, render_pipeline, })
     }
 
     fn handle_key(&self, event_loop: &ActiveEventLoop, code: KeyCode, is_pressed: bool) {
@@ -226,7 +288,7 @@ impl State {
         // encoder is used for a render pass. which has all methods that handle actual drawing 
         // there are some nesting things going on...
         {
-            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                         view: &view, 
@@ -244,6 +306,11 @@ impl State {
                 timestamp_writes: None, 
                 multiview_mask: None, 
             });
+
+            // set render pass pipeline to the new pipeline within state::new()
+            //
+            render_pass.set_pipeline(&self.render_pipeline);
+            render_pass.draw(0..3, 0..1);
         }
 
     self.queue.submit(std::iter::once(encoder.finish()));
