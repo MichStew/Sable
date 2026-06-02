@@ -7,6 +7,8 @@ use winit::{
     window::Window,
     };
 use wgpu::util::DeviceExt;
+use cgmath::prelude::*;
+
 mod texture;
 // stop giving errors. from me...to compiler...with love
 fn main() {run();}
@@ -66,7 +68,60 @@ pub struct State {
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     camera_controller: CameraController,
+    instances: Vec<Instance>,
+    instance_buffer: wgpu::Buffer,
 }
+
+struct Instance {
+    position: cgmath::Vector3<f32>,
+    rotation: cgmath::Quaternion<f32>,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+struct InstanceRaw {
+    model: [[f32;4];4]
+}
+
+impl Instance {
+    fn to_raw(&self) -> InstanceRaw {
+        InstanceRaw {
+	    model: (cgmath::Matrix4::from_translation(self.position) * cgmath::Matrix4::from(self.rotation)).into(),
+	}
+    }
+}
+
+impl InstanceRaw {
+    fn desc() -> wgpu::VertexBufferLayout<'static> {
+        use std::mem;
+	wgpu::VertexBufferLayout {
+	array_stride: mem::size_of::<InstanceRaw>() as wgpu::BufferAddress,
+	step_mode: wgpu::VertexStepMode::Instance,
+	attributes: &[
+	    wgpu::VertexAttribute {
+	       offset: 0,
+	       shader_location: 5,
+	       format: wgpu::VertexFormat::Float32x4,
+	    }, 
+	    wgpu::VertexAttribute {
+	       offset: 0,
+	       shader_location: 6,
+	       format: wgpu::VertexFormat::Float32x4,
+	    },
+	    wgpu::VertexAttribute {
+	       offset: 0,
+	       shader_location: 7,
+	       format: wgpu::VertexFormat::Float32x4,
+	    },
+	    wgpu::VertexAttribute {
+	       offset: 0,
+	       shader_location: 8,
+	       format: wgpu::VertexFormat::Float32x4,
+	    },
+	],
+      }
+    }
+  }
 
 struct Camera {
     eye: cgmath::Point3<f32>,
@@ -348,7 +403,7 @@ impl State {
             desired_maximum_frame_latency: 2,
         };
 
-        let diffuse_bytes = include_bytes!("happy-tree.png");
+       let diffuse_bytes = include_bytes!("happy-tree.png");
         let diffuse_texture = texture::Texture::from_bytes(&device, &queue, diffuse_bytes, "happy-tree.png").unwrap();
 
         let texture_bind_group_layout = 
@@ -411,11 +466,42 @@ impl State {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             }
         );
+	
+	//Originally had this instancing up above the buffer layout stuffs but it wasnt rendering anything
+	// TODO dynamic instancing
+	// const instances for now
+	const NUM_INSTANCES_PER_ROW : u32 = 10;
+	const INSTANCE_DISPLACEMENT: cgmath::Vector3<f32> = cgmath::Vector3::new(
+	NUM_INSTANCES_PER_ROW as f32 * 0.5, //x
+	0.0,
+	NUM_INSTANCES_PER_ROW as f32 * 0.5); //z
+
+	let instances = (0..NUM_INSTANCES_PER_ROW).flat_map(|z| {
+	    (0..NUM_INSTANCES_PER_ROW).map(move |x| {
+	        let position = cgmath::Vector3 { x : x as f32, y:0.0, z : z as f32} - INSTANCE_DISPLACEMENT;
+		let rotation = if position.is_zero() {
+		    cgmath::Quaternion::from_axis_angle(cgmath::Vector3::unit_z(), cgmath::Deg(0.0))
+		} else {
+		    cgmath::Quaternion::from_axis_angle(position.normalize(), cgmath::Deg(45.0))
+		};
+
+		Instance {
+		    position, rotation,
+		}
+	    })
+	    }).collect::<Vec<_>>();
+	
+	let instance_data = instances.iter().map(Instance::to_raw).collect::<Vec<_>>();
+	let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor{
+	    label: Some("Instance Buffer"),
+	    contents: bytemuck::cast_slice(&instance_data),
+	    usage: wgpu::BufferUsages::VERTEX,
+	    });
 
         let camera_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             entries: &[
                 wgpu::BindGroupLayoutEntry {
-                    binding: 0,
+		    binding: 0,
                     visibility: wgpu::ShaderStages::VERTEX,
                     ty: wgpu::BindingType::Buffer { 
                     ty: wgpu::BufferBindingType::Uniform,
@@ -469,7 +555,7 @@ impl State {
             vertex: wgpu::VertexState { 
                 module: &shader,
                 entry_point: Some("vs_main"),
-                buffers:  &[Vertex::desc()], // goes to Vram
+                buffers:  &[Vertex::desc(), InstanceRaw::desc()], // goes to Vram
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -529,7 +615,7 @@ impl State {
         Ok(Self {surface, device, queue, config, is_surface_configured: false, window, 
             render_pipeline, vertex_buffer, num_vertices, index_buffer, num_indices,
             diffuse_bind_group, diffuse_texture, camera, camera_uniform, camera_buffer,
-            camera_bind_group, camera_controller})
+            camera_bind_group, camera_controller, instances, instance_buffer})
     }
 
     fn handle_key(&mut self, event_loop: &ActiveEventLoop, code: KeyCode, is_pressed: bool) {
@@ -614,6 +700,7 @@ impl State {
             render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
             render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+	    render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
             render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
             render_pass.draw_indexed(0..self.num_vertices, 0, 0..1);
         }
