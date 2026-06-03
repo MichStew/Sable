@@ -1,21 +1,31 @@
-use std::io::{BufReader, Cursoe};
-use wgpu:util::DeviceExt;
+use std::io::{BufReader, Cursor,Range};
+use wgpu::util::DeviceExt;
 use crate::{model,texture};
 
-pub async fn load_string(file_name: &str) -> anyhow::Result<String> {
-    let txt = {
-        let path = std::path::Path::new(env!("OUT_DIR")
-            .join("res")
-            .join(file_name);
-        std::fs::read_to_string(path)?};
-        Ok(txt)
-}
+mod texture;
+mod model;
+use model::Mesh;
 
-pub async fn load_binary(file_name: &str) -> anyhow::Result<Vec<u8>> {
-    let data = {
-        let path = std::path::Path::new(env!("OUT_DIR"))
-            .join("res")
-            .join(file_name);
-        std::fs::read(path)?};
-    Ok(data)
+
+pub trait DrawModel<'a> {
+    fn draw_mesh(&mut self, mesh: &'a Mesh);
+    fn draw_mesh_instanced(
+        &mut self,
+        mesh: &'a Mesh, 
+        instances: Range<u32>,
+    );
+}
+impl<'a, 'b> DrawModel<'b> for wgpu::RenderPass<'a>
+where 
+    'b: 'a,
+{
+    fn draw_mesh(&mut self, mesh: &'b Mesh) {
+        self.draw_mesh_instanced(mesh, 0..1);
+    }
+
+    fn draw_mesh_instanced(& mut self, mesh: &'b Mesh, instances: Range<u32>,) {
+        self.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+        self.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+        self.draw_indexed(0..mesh.num_elements, 0, instances);
+    }
 }
