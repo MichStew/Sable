@@ -80,6 +80,7 @@ pub struct State {
     camera_controller: CameraController,
     instances: Vec<Instance>,
     instance_buffer: wgpu::Buffer,
+    depth_texture: texture::Texture,
 }
 
 struct Instance {
@@ -407,6 +408,8 @@ impl State {
        let diffuse_bytes = include_bytes!("happy-tree.png");
         let diffuse_texture = texture::Texture::from_bytes(&device, &queue, diffuse_bytes, "happy-tree.png").unwrap();
 
+        let depth_texture = texture::Texture::create_depth_texture(&device, &config, "depth_texture");
+
         let texture_bind_group_layout = 
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 entries: &[
@@ -547,7 +550,7 @@ impl State {
             vertex: wgpu::VertexState { 
                 module: &shader,
                 entry_point: Some("vs_main"), // Instance does not have enough memory
-                buffers:  &[Vertex::desc()], // goes to Vram
+                buffers:  &[Vertex::desc(), InstanceRaw::desc()], // goes to Vram
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -579,7 +582,13 @@ impl State {
                 unclipped_depth: false, 
                 conservative: false,
             },
-            depth_stencil: None, 
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: texture::Texture::DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::Less), //back to front
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState {
                 count: 1, 
                 mask: !0,
@@ -610,7 +619,7 @@ impl State {
         Ok(Self {surface, device, queue, config, is_surface_configured: false, window, 
             render_pipeline, vertex_buffer, num_vertices, index_buffer, num_indices,
             diffuse_bind_group, diffuse_texture, camera, camera_uniform, camera_buffer,
-            camera_bind_group, camera_controller, instances, instance_buffer})
+            camera_bind_group, camera_controller, instances, instance_buffer, depth_texture,})
     }
 
     fn handle_key(&mut self, event_loop: &ActiveEventLoop, code: KeyCode, is_pressed: bool) {
@@ -627,6 +636,8 @@ impl State {
             self.config.height = height;
             self.surface.configure(&self.device, &self.config);
             self.is_surface_configured = true;
+            self.depth_texture = texture::Texture::create_depth_texture(&self.device, &self.config, "depth_texture");
+            
         }
     }
 
@@ -684,7 +695,14 @@ impl State {
                     }
                 )
                 ], // closing for color attachments
-                depth_stencil_attachment: None,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_texture.view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
                 occlusion_query_set: None,
                 timestamp_writes: None, 
                 multiview_mask: None, 
@@ -695,9 +713,9 @@ impl State {
             render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
             render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-	    //render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+	    render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
             render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            render_pass.draw_indexed(0..self.num_vertices, 0, 0..self.instances.len() as _);
+            render_pass.draw_indexed(0..self.num_indices, 0, 0..self.instances.len() as _);
         }
 
     self.queue.submit(std::iter::once(encoder.finish()));
