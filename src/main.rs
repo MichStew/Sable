@@ -55,10 +55,6 @@ pub struct State {
     is_surface_configured: bool,
     window: Arc<Window>,
     render_pipeline: wgpu::RenderPipeline,
-    vertex_buffer : wgpu::Buffer,
-    num_vertices: u32,
-    index_buffer: wgpu::Buffer, 
-    num_indices: u32,
     diffuse_bind_group: wgpu::BindGroup,
     diffuse_texture: texture::Texture,
     camera: Camera,
@@ -375,14 +371,11 @@ impl State {
             desired_maximum_frame_latency: 2,
         };
 
-       let diffuse_bytes = include_bytes!("happy-tree.png");
+        let diffuse_bytes = include_bytes!("happy-tree.png");
         let diffuse_texture = texture::Texture::from_bytes(&device, &queue, diffuse_bytes, "happy-tree.png").unwrap();
 
         let depth_texture = texture::Texture::create_depth_texture(&device, &config, "depth_texture");
 
-        let obj_model = resources::load_model("cube.obj", &device, &queue, &texture_bind_group_layout)
-            .await
-            .unwrap();
 
         let texture_bind_group_layout = 
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -423,6 +416,10 @@ impl State {
                 label: Some("diffuse_bind_group"),
             }
         );
+
+        let obj_model = resources::load_model("cube.obj", &device, &queue, &texture_bind_group_layout)
+            .await
+            .unwrap();
 
         let camera = Camera {
             eye: (0.0, 1.0, 2.0).into(),
@@ -528,7 +525,7 @@ impl State {
             vertex: wgpu::VertexState { 
                 module: &shader,
                 entry_point: Some("vs_main"), // Instance does not have enough memory
-                buffers:  &[model::VertexModel::desc(), InstanceRaw::desc()], // goes to Vram
+                buffers:  &[model::ModelVertex::desc(), InstanceRaw::desc()], // goes to Vram
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -686,13 +683,14 @@ impl State {
             });
 
             // set render pass pipeline to the new pipeline within state::new()
-            render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
-            render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
+           
 
 	    render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+            render_pass.set_pipeline(&self.render_pipeline);
             use model::DrawModel;
-            render_pass.draw_mesh_instanced(&self.obj_model.meshes[0], 0..self.instances.len()as u32);
+            let mesh = &self.obj_model.meshes[0];
+            let material = &self.obj_model.materials[mesh.material];
+            render_pass.draw_model_instanced(&self.obj_model, 0..self.instances.len()as u32, &self.camera_bind_group);
         }
 
     self.queue.submit(std::iter::once(encoder.finish()));

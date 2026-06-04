@@ -12,6 +12,12 @@ wgpu = "29.0.3"
 pollster = "0.3"
 bytemuck = {version = "1.24", features = ["derive"] }
 cgmath = "0.18"
+tobj = { version = "4.0.2", features = ["async"]}
+
+[build-dependencies]
+anyhow="1.0"
+fs_extra="1.2"
+glob="0.3"
 
 [dependencies.image]
 version = "0.24"
