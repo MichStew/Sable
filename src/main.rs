@@ -10,6 +10,7 @@ use wgpu::util::DeviceExt;
 use cgmath::prelude::*;
 use model::{Vertex,DrawModel};
 
+mod RPI;
 mod texture;
 mod model;
 mod resources;
@@ -36,14 +37,15 @@ pub fn run() -> anyhow::Result<()> {
     Ok(()) // return the expected tuple assuming all goes well
 }
 
-const INDICES: &[u16] = &[
-    0, 1, 4,
-    1, 2, 4,
-    2, 3, 4,
-];
-
-// vertices have a position and a color 
-// instead of using raw rgb we can have coordinates to map texture to vertices
+#[repr(C)]
+#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+// uniforms require 16 bytes. padding is added to the struct to get around this req
+struct LightUniform {
+    position: [f32;3], // 3 bytes
+    _padding: u32, // + 1 byte
+    color: [f32;3],
+    _padding2: u32,
+}
 
 // unsafe impl bytemuck::Pod for Vertex{}
 // unsafe impl bytemuck::Zeroable for Vertex{}
@@ -66,6 +68,9 @@ pub struct State {
     instance_buffer: wgpu::Buffer,
     depth_texture: texture::Texture,
     obj_model: model::Model,
+    light_buffer: wgpu::Buffer,
+    light_uniform: LightUniform,
+    light_bind_group: wgpu::BindGroup,
 }
 
 struct Instance {
@@ -315,11 +320,18 @@ impl App {
 impl State { 
     
     fn update(&mut self) {
+        let old_position : cgmath::Vector3<_> = self.light_uniform.position.into();
+        // light will rotate 1 degree around origin every frame
+        self.light_uniform.position = 
+            (cgmath::Quaternion::from_axis_angle((0.0, 1.0, 0.0).into(), cgmath::Deg(1.0)) * old_position).into();
+        self.queue.write_buffer(&self.light_buffer, 0, bytemuck::cast_slice(&[self.light_uniform]));
         self.camera_controller.update_camera(&mut self.camera); 
         self.camera_uniform.update_view_proj(&self.camera);
         self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[self.camera_uniform]));
     }
+    
     pub async fn new(window : Arc<Window>) -> anyhow::Result<Self> {
+        
         let size = window.inner_size(); 
         // docs say I can just call this method wihtout arguments and get the same struct
         // doing this since my compiler states InstanceDescriptor does not have display field.
@@ -442,6 +454,43 @@ impl State {
             }
         );
 	
+        let light_uniform = LightUniform {
+            position: [2.0, 2.0, 2.0],
+            _padding: 0,
+            color: [1.0,1.0,1.0],
+            _padding2: 0,
+        };
+
+        let light_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Light Buffer"),
+            contents: bytemuck::cast_slice(&[light_uniform]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let light_bind_group_layout = 
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                count: None,
+                }],
+            label: None,
+    });
+
+        let light_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor{
+            layout: &light_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: light_buffer.as_entire_binding(),
+            }],
+            label: None,
+    });
+
 	//Originally had this instancing up above the buffer layout stuffs but it wasnt rendering anything
 	// TODO dynamic instancing
         const SPACE_BETWEEN : f32 = 3.0;
@@ -474,9 +523,9 @@ impl State {
 		    binding: 0,
                     visibility: wgpu::ShaderStages::VERTEX,
                     ty: wgpu::BindingType::Buffer { 
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+                        ty: wgpu::BufferBindingType::Uniform, 
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                 },
                 count: None,
                 }
@@ -497,11 +546,10 @@ impl State {
 
         let camera_controller = CameraController::new(0.2);
 
-        let shader = device.create_shader_module( //wgpu::include_wgsl!("shader.wgsl")
-                wgpu::ShaderModuleDescriptor{
-                    label: Some("Shader"),
-                    source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
-                });
+        let shader = wgpu::ShaderModuleDescriptor{
+                        label: Some("Shader"),
+                        source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+                };
         
         // defines sets of bind group layouts that the pipeline can use, these layouts must be
         // defined - see texture_bind_group_layout to see how this happens
@@ -511,6 +559,7 @@ impl State {
                 bind_group_layouts: &[
                     Some(&texture_bind_group_layout),
                     Some(&camera_bind_group_layout),
+                    Some(&light_bind_group_layout),
                 ],
                 immediate_size: 0,
             });
@@ -519,60 +568,14 @@ impl State {
         // this really just describes the wgsl files I wrote just a bit ago
         // this is why we had those @vertex and @fragment
         // buffers are also handled in those files so we leave them blank here.
-        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor { 
-            label: Some("Render Pipeline"),
-            layout: Some(&render_pipeline_layout),
-            vertex: wgpu::VertexState { 
-                module: &shader,
-                entry_point: Some("vs_main"), // Instance does not have enough memory
-                buffers:  &[model::ModelVertex::desc(), InstanceRaw::desc()], // goes to Vram
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader, 
-                entry_point: Some("fs_main"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: config.format,
-                    blend: Some(wgpu::BlendState{
-                        color: wgpu::BlendComponent::REPLACE,
-                        alpha: wgpu::BlendComponent::REPLACE,
-                    }),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            // the primitive describes how I want the program to interpret the vertices 
-            // triangle list means every three vertices corresponds to one triangle !note this 4 IO
-            // ccw describes which way wgpu will determine the triangle is facing based on the
-            // relationship between the points
-            //
-            // Throwback: triangles that are not facing forward are not rendered 
-            // NCOT Technology has a very intriguing video on this topic that applies here.
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None, 
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: Some(wgpu::Face::Back),
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false, 
-                conservative: false,
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: texture::Texture::DEPTH_FORMAT,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less), //back to front
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState {
-                count: 1, 
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            multiview_mask: None,
-            cache: None,
-        });
-
+        let render_pipeline = RPI::create_render_pipeline(
+            &device,
+            &render_pipeline_layout,
+            config.format,
+            Some(texture::Texture::DEPTH_FORMAT),
+            &[model::ModelVertex::desc(), InstanceRaw::desc()],
+           shader,
+            );
 
         Ok(Self {
             surface, 
@@ -593,6 +596,9 @@ impl State {
             instance_buffer, 
             depth_texture,
             obj_model,
+            light_bind_group,
+            light_buffer,
+            light_uniform,
         })
     }
 
