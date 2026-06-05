@@ -1,7 +1,5 @@
 // move this render pipeline creation to its own file, to be modular
 
-use wgpu::*;
-
 pub fn create_render_pipeline(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
