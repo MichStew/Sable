@@ -8,10 +8,10 @@ var<uniform> camera: Camera;
 struct Light {
   position: vec3<f32>,
   color: vec3<f32>,
-};
+}; 
 
 @group(1) @binding(0)
-var<uniform> light: Light; 
+var<uniform> light: Light;
 
 struct VertexInput {
   @location(0) position: vec3<f32>,
@@ -34,7 +34,7 @@ fn vs_main(
 }
 
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> { 
   return vec4<f32>(in.color, 1.0);
 }
 
