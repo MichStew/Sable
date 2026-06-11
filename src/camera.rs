@@ -106,13 +106,22 @@ impl CameraController {
 // state.handle_key(event_loop, code, key_state.ispressed())
 // so this will intake the key and perform matrix ops based on the input
 //
-    pub fn handle_key(&self, key: KeyCode, pressed: bool) {
+    pub fn handle_key(&mut self, key: KeyCode, pressed: bool) {
         if pressed { match key {
-            KeyCode::KeyW => {println!("w was pressed");},
-            KeyCode::KeyA => {println!("A was pressed");},
-            KeyCode::KeyS => {println!("s was pressed");},
-            KeyCode::KeyD => {println!("d was pressed");} ,
-            _ => {println!("no key has been pressed - error");}
+            KeyCode::KeyW => {
+                self.ahead_pressed = true;
+            },
+            KeyCode::KeyA => {
+                self.left_pressed = true;
+            },
+            KeyCode::KeyS => {
+             self.back_pressed = true;
+
+            },
+            KeyCode::KeyD => {
+             self.right_pressed = true;
+            } ,
+            _ => {}
         }}
 
     }
@@ -121,29 +130,35 @@ impl CameraController {
     pub fn handle_mouse() {}
 
     // do some operation on the camera when an input is received
-    pub fn update_camera(&self, camera: &mut Camera) {
-        println!("I am gonna update so hard");
-        /*use cgmath::InnerSpace;
+    pub fn update_camera(&mut self, camera: &mut Camera) {
+        use cgmath::InnerSpace;
         let forward = camera.target - camera.eye;
         let forward_norm = forward.normalize();
         let forward_mag = forward.magnitude();
 
         // some extra logic that is supposed to normalize the camera, this will need to be refined
         // greatly
-        if self.is_forward_pressed && forward_mag > self.speed {
+        if self.ahead_pressed && forward_mag > self.speed {
             camera.eye += forward_norm * self.speed;
+            self.ahead_pressed = false;
         }
-        if self.is_backward_pressed {
+
+        if self.back_pressed {
             camera.eye -= forward_norm * self.speed;
+            self.back_pressed = false;
         }
+
+        // right is expressed as the cross product of the y axis and the forward normal. why?
         let right = forward_norm.cross(camera.up);
         let forward = camera.target - camera.eye;
         let forward_mag = forward.magnitude();
-        if self.is_right_pressed {
+        if self.right_pressed {
             camera.eye = camera.target - (forward + right * self.speed).normalize() * forward_mag;
+            self.right_pressed = false;
         }
-        if self.is_left_pressed {
+        if self.left_pressed {
             camera.eye = camera.target - (forward - right * self.speed).normalize() * forward_mag;
-        } */
+            self.left_pressed = false;
+        } 
     }
 }

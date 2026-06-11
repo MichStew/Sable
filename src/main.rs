@@ -534,6 +534,7 @@ impl State {
         })
     }
 
+// if user quits -> quit, else, send it to camera controller for operations to be had
     fn handle_key(&mut self, event_loop: &ActiveEventLoop, code: KeyCode, is_pressed: bool) {
         if code == KeyCode::Escape && is_pressed {
         event_loop.exit();
