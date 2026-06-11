@@ -14,19 +14,11 @@ mod RPI;
 mod texture;
 mod model;
 mod resources;
+mod camera;
 // stop giving errors. from me...to compiler...with love
 // const instances for now
 const NUM_INSTANCES_PER_ROW : u32 = 20;
 const INSTANCE_DISPLACEMENT: cgmath::Vector3<f32> = cgmath::Vector3::new(NUM_INSTANCES_PER_ROW as f32 * 0.5, 0.0, NUM_INSTANCES_PER_ROW as f32 * 0.5); //z
-#[rustfmt::skip]
-pub const OPENGL_TO_WGPU : cgmath::Matrix4<f32> = cgmath::Matrix4::from_cols(
-cgmath::Vector4::new(1.0, 0.0, 0.0, 0.0),
-cgmath::Vector4::new(0.0, 1.0, 0.0, 0.0),
-cgmath::Vector4::new(0.0, 0.0, 0.5, 0.0),
-cgmath::Vector4::new(0.0, 0.0, 0.5, 1.0), // this w coordinate should shift perspective RTR
-);
-
-
 fn main() {run();}
 
 pub fn run() -> anyhow::Result<()> {
@@ -57,11 +49,11 @@ pub struct State {
     is_surface_configured: bool,
     window: Arc<Window>,
     render_pipeline: wgpu::RenderPipeline,
-    camera: Camera,
-    camera_uniform: CameraUniform,
+    camera: camera::Camera,
+    camera_uniform: camera::CameraUniform,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
-    camera_controller: CameraController,
+    camera_controller: camera::CameraController,
     instances: Vec<Instance>,
     instance_buffer: wgpu::Buffer,
     depth_texture: texture::Texture,
@@ -149,123 +141,6 @@ impl InstanceRaw {
     }
   }
 
-struct Camera {
-    eye: cgmath::Point3<f32>,
-    target: cgmath::Point3<f32>,
-    up: cgmath::Vector3<f32>,
-    aspect: f32,
-    fovy: f32,
-    znear: f32, 
-    zfar: f32,
-}
-
-impl Camera { 
-    // theres some normalization that will have to occur here due to inconsistencies with DirectX
-    // and OpenGL, specifically the coordinate definitions 
-     fn build_view_projection_matrix(&self) -> cgmath::Matrix4<f32> {
-        // view matrix moves the world to be at position and rotation of the camera
-         let view = cgmath::Matrix4::look_at_rh(self.eye, self.target, self.up);
-        // projection allows for depth (orthographic / perspective) 
-        let proj = cgmath::perspective(cgmath::Deg(self.fovy),self.aspect, self.znear, self.zfar);
-
-    return OPENGL_TO_WGPU  * proj * view;
-    }
-}
-
-// we will create a camera uniform - a uniform means that this data will be available to to every
-// shader invocation...is this like a global variable? idk
-#[repr(C)]
-#[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]// allows buffer allocation of x
-struct CameraUniform {
-    view_pos: [f32;4],
-    view_proj: [[f32;4];4] // 4 4 element matrices within one matrix.
-    }
-
-impl CameraUniform {
-    fn new() -> Self {
-        use cgmath::SquareMatrix;
-        Self { 
-            view_pos: [0.0;4],
-            view_proj: cgmath::Matrix4::identity().into(),
-        }
-    }
-    
-    fn update_view_proj(&mut self, camera: &Camera) {
-        self.view_pos = camera.eye.to_homogeneous().into();
-        self.view_proj = camera.build_view_projection_matrix().into();
-    }
-}
-
-struct CameraController { 
-    speed: f32, 
-    is_forward_pressed: bool,
-    is_backward_pressed: bool,
-    is_left_pressed: bool,
-    is_right_pressed: bool,
-}
-
-impl CameraController {
-    fn new(speed: f32) -> Self {
-        Self {
-            speed,
-            is_forward_pressed: false,
-            is_backward_pressed:false,
-            is_left_pressed: false,
-            is_right_pressed: false,
-        }
-    }
-
-    fn handle_key(&mut self, code: KeyCode, is_pressed: bool) -> bool {
-        match code {
-            KeyCode::KeyW | KeyCode::ArrowUp => {
-                self.is_forward_pressed = is_pressed;
-                true
-            },
-            KeyCode::KeyA | KeyCode::ArrowLeft => {
-                self.is_left_pressed = is_pressed;
-                true
-            },
-             KeyCode::KeyS | KeyCode::ArrowDown => {
-                self.is_backward_pressed = is_pressed;
-                true
-            },
-            KeyCode::KeyD | KeyCode::ArrowRight => {
-                self.is_right_pressed = is_pressed;
-                true
-            },
-            _ => false,
-        }
-    }
-    
-    fn update_camera(&self, camera: &mut Camera) {
-        use cgmath::InnerSpace;
-        let forward = camera.target - camera.eye;
-        let forward_norm = forward.normalize();
-        let forward_mag = forward.magnitude();
-
-        // some extra logic that is supposed to normalize the camera, this will need to be refined
-        // greatly
-        if self.is_forward_pressed && forward_mag > self.speed {
-            camera.eye += forward_norm * self.speed;
-        }
-        if self.is_backward_pressed {
-            camera.eye -= forward_norm * self.speed;
-        }
-        let right = forward_norm.cross(camera.up);
-        let forward = camera.target - camera.eye;
-        let forward_mag = forward.magnitude();
-        if self.is_right_pressed {
-            camera.eye = camera.target - (forward + right * self.speed).normalize() * forward_mag;
-        }
-        if self.is_left_pressed {
-            camera.eye = camera.target - (forward - right * self.speed).normalize() * forward_mag;
-        }
-    }
-}
-
-// the reason state is an option is that we need to be in resumed state to create a window, maybe
-// like a pause menu
-
 pub struct App {
     state: Option<State>,
 }
@@ -328,6 +203,10 @@ impl ApplicationHandler<State> for App {
             },
             ..
         } => state.handle_key(event_loop, code, key_state.is_pressed()),
+        
+        //  need to handle mouse movement not just a click / scroll
+        //WindowEvent::MouseInput {event: KeyEvent {
+
         _ => {}
         }
     }
@@ -344,13 +223,19 @@ impl App {
 impl State { 
     
     fn update(&mut self) {
+        // camera will need to be redrawn here every time
+
         let old_position : cgmath::Vector3<_> = self.light_uniform.position.into();
         // light will rotate 1 degree around origin every frame
         self.light_uniform.position = 
             (cgmath::Quaternion::from_axis_angle((0.0, 1.0, 0.0).into(), cgmath::Deg(1.0)) * old_position).into();
         self.queue.write_buffer(&self.light_buffer, 0, bytemuck::cast_slice(&[self.light_uniform]));
+        
+        // first handle the input
+        // then update the projection
+        // and render it
         self.camera_controller.update_camera(&mut self.camera); 
-        self.camera_uniform.update_view_proj(&self.camera);
+        self.camera_uniform.update_view_projection(&mut self.camera);
         self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[self.camera_uniform]));
     }
     
@@ -459,18 +344,10 @@ impl State {
             .await
             .unwrap();
 
-        let camera = Camera {
-            eye: (0.0, 4.0, 10.0).into(),
-            target: (0.0, 0.0, 0.0).into(),
-            up: cgmath::Vector3::unit_y(),
-            aspect: config.width as f32 / config.height as f32,
-            fovy: 45.0,
-            znear: 0.1,
-            zfar: 100.0,
-        };
+        let camera = camera::Camera::new(config.height as f32, config.width as f32);
 
-        let mut camera_uniform = CameraUniform::new();
-        camera_uniform.update_view_proj(&camera);
+        let mut camera_uniform = camera::CameraUniform::new();
+        camera_uniform.update_view_projection(&camera); // default
 
         let camera_buffer = device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
@@ -535,7 +412,7 @@ impl State {
             label: Some("camera_bind_group"),
         });
 
-        let camera_controller = CameraController::new(0.2);
+        let camera_controller = camera::CameraController::new(0.2);
 
         let shader = wgpu::ShaderModuleDescriptor{
                         label: Some("Shader"),
