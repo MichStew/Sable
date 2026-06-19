@@ -62,6 +62,8 @@ pub struct State {
     light_uniform: LightUniform,
     light_bind_group: wgpu::BindGroup,
     light_render_pipeline: wgpu::RenderPipeline,
+    is_pressed: bool,
+    is_mouse_moving: bool,
 }
 
 struct Instance {
@@ -162,12 +164,9 @@ impl ApplicationHandler<State> for App {
         
         // this window data will need to be passed to multiple threads
         let window = Arc::new(event_loop.create_window(window_attributes).unwrap()); 
-        
-        #[cfg(not(target_arch="wasm32"))]
-        {
-            self.state = Some(pollster::block_on(State::new(window)).unwrap());
+        self.state = Some(pollster::block_on(State::new(window)).unwrap());
             
-        }}
+    }
 
         #[allow(unused_mut)]
         fn user_event(&mut self, _event_loop: &ActiveEventLoop, mut event: State) {
@@ -177,7 +176,7 @@ impl ApplicationHandler<State> for App {
 
         fn window_event(&mut self, event_loop: &ActiveEventLoop, _window_id: winit::window::WindowId, event:WindowEvent) { 
         let state = match &mut self.state {
-            Some(canvas) => canvas,
+            Some(state) => state,
             None => return,
             };
 
@@ -200,15 +199,25 @@ impl ApplicationHandler<State> for App {
                     physical_key : PhysicalKey::Code(code),
                     state: key_state,
                     ..
-            },
+                },
             ..
         } => state.handle_key(event_loop, code, key_state.is_pressed()),
         
-        //  need to handle mouse movement not just a click / scroll
-        //WindowEvent::MouseInput {event: KeyEvent {
-
-        _ => {}
+            _ => {}
         }
+        }
+
+        fn device_event(&mut self, event_loop: &ActiveEventLoop, device_id: DeviceId, event: DeviceEvent) {
+        let state = match &mut self.state {
+            Some(state) => state, 
+                None => return
+            };
+
+        match event {
+            // need to handle mouse movement not just a click / scroll
+            DeviceEvent::MouseMotion {delta} => state.handle_mouse(event_loop, delta),
+            _ => {}, // do nothing for the rest of em 
+        };
     }
 }
 
@@ -234,7 +243,10 @@ impl State {
         // first handle the input
         // then update the projection
         // and render it
-        self.camera_controller.update_camera(&mut self.camera); 
+        if self.is_pressed {
+            self.camera_controller.update_camera(&mut self.camera); 
+        }
+
         self.camera_uniform.update_view_projection(&mut self.camera);
         self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[self.camera_uniform]));
     }
@@ -531,6 +543,8 @@ impl State {
             light_buffer,
             light_uniform,
             light_render_pipeline,
+            is_pressed: false, // handle camera dt frame by frame
+            is_mouse_moving: false,
         })
     }
 
@@ -539,8 +553,13 @@ impl State {
         if code == KeyCode::Escape && is_pressed {
         event_loop.exit();
         } else {
-            self.camera_controller.handle_key(code, is_pressed);
+            // controller returns a bool, seem to be getting stuck in true
+           self.is_pressed = self.camera_controller.handle_key(code, is_pressed);
         }
+    }
+
+    fn handle_mouse(&mut self, event_loop: &ActiveEventLoop, delta: (f64,f64)) {
+        self.is_mouse_moving = self.camera_controller.handle_mouse(delta);
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {

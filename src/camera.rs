@@ -27,7 +27,7 @@ impl Camera {
             eye:(0.4, 0.4, -0.2).into(), // look from where? 
             target: (0.0,0.0,0.0).into(), // default: look at the origin
             up: cgmath::Vector3::unit_y(), // y axis is up
-            aspect: height as f32/ width as f32, // aspect ratio
+            aspect: width as f32/ height as f32, // aspect ratio
             fovy: 45.0, // consider a 2mp with a 45deg fov
             znear: 0.1,
             zfar: 100.0,
@@ -40,7 +40,7 @@ impl Camera {
     // vertical position
     
       let view = cgmath::Matrix4::look_at_rh(self.eye, self.target, self.up);
-      let projection = cgmath::perspective(cgmath::Deg(self.fovy),self.aspect, self.znear, self.zfar);
+      let projection = cgmath::perspective(cgmath::Deg(self.fovy), self.aspect, self.znear, self.zfar);
     
       // normalize the cgmath matrix to OpenGL bounds
       return OPENGL_TO_WGPU * projection * view; 
@@ -100,65 +100,102 @@ impl CameraController {
         }
     }
 
-    pub fn rotate(&self, dy: f32 , dx: f32) {
-        //TODO
+    pub fn handle_mouse(&mut self, delta: (f64, f64)) -> bool {
+        // I want to return a bool to track if the mouse is moving for debug stuff
+        // also just useful to have. 
+        // so winit will handle the recognition of Some(deviceEvent) 
+        // it will call impl handleMouse in state which will come here
+        // here we will do some operations on the camera based on the mouse movement
+
+        // here I imagine we will only change the target based on the normalized values of dx, dy
+
+        //println!("here I will do some ops on the camera");
+        match (delta.0, delta.1) {
+            (0.0,0.0) => {false},
+            _ => {
+                println!("dx is {}, and dy is {}", delta.0, delta.1);
+                true
+            }
+        }
     }
-// state.handle_key(event_loop, code, key_state.ispressed())
-// so this will intake the key and perform matrix ops based on the input
-//
-    pub fn handle_key(&mut self, key: KeyCode, pressed: bool) {
-        if pressed { match key {
+
+    // this returns a bool so we can keep track of whether or not we are pressed in state
+    pub fn handle_key(&mut self, key: KeyCode, pressed: bool) -> bool {
+        match key {
             KeyCode::KeyW => {
-                self.ahead_pressed = true;
+            self.ahead_pressed = true;
+            true
             },
             KeyCode::KeyA => {
-                self.left_pressed = true;
+            self.left_pressed = true;
+            true
             },
             KeyCode::KeyS => {
              self.back_pressed = true;
-
+             true
             },
             KeyCode::KeyD => {
              self.right_pressed = true;
+             true
             } ,
-            _ => {}
-        }}
+            _ => { false }
+        }
 
     }
 
     // wanting to have fps mouse input so 
-    pub fn handle_mouse() {}
+    /*
+    pub fn handle_mouse(&mut self, camera: &mut Camera) {
+        match mouse
+    } */
 
     // do some operation on the camera when an input is received
+    // speed in setup in main
     pub fn update_camera(&mut self, camera: &mut Camera) {
         use cgmath::InnerSpace;
         let forward = camera.target - camera.eye;
         let forward_norm = forward.normalize();
         let forward_mag = forward.magnitude();
+        
+        // I must now figure out why motion state does not reset each frame.
+        // it needs to reset each frame to handle when there is no motion
 
         // some extra logic that is supposed to normalize the camera, this will need to be refined
         // greatly
         if self.ahead_pressed && forward_mag > self.speed {
             camera.eye += forward_norm * self.speed;
-            self.ahead_pressed = false;
+            self.ahead_pressed = false; 
+            println!("ahead");
+
         }
 
         if self.back_pressed {
             camera.eye -= forward_norm * self.speed;
             self.back_pressed = false;
+            println!("back");
         }
 
         // right is expressed as the cross product of the y axis and the forward normal. why?
+        // right now I can only press one button at a time, I wonder why
         let right = forward_norm.cross(camera.up);
-        let forward = camera.target - camera.eye;
-        let forward_mag = forward.magnitude();
+    
         if self.right_pressed {
-            camera.eye = camera.target - (forward + right * self.speed).normalize() * forward_mag;
-            self.right_pressed = false;
+            camera.eye.x -= 0.4 * self.speed;
+            camera.target.x -= 0.4 * self.speed;
+            self.right_pressed = false; 
         }
         if self.left_pressed {
-            camera.eye = camera.target - (forward - right * self.speed).normalize() * forward_mag;
+            camera.eye.x += 0.4 * self.speed;
+            camera.target.x += 0.4 * self.speed;
             self.left_pressed = false;
-        } 
+        }
+        if self.x_rotating { 
+            camera.target.x += self.speed;
+        }
+
+        if self.y_rotating {
+            camera.target.y += self.speed; 
+        }
+
     }
 }
