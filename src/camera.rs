@@ -1,5 +1,9 @@
 use winit::keyboard::KeyCode;
+use std::time::Duration;
+use cgmath::*;
+use std::f32::consts::FRAC_PI_2 as SAFE_PI;
 #[rustfmt::skip]
+
 pub const OPENGL_TO_WGPU : cgmath::Matrix4<f32> = cgmath::Matrix4::from_cols(
 cgmath::Vector4::new(1.0, 0.0, 0.0, 0.0),
 cgmath::Vector4::new(0.0, 1.0, 0.0, 0.0),
@@ -11,42 +15,73 @@ cgmath::Vector4::new(0.0, 0.0, 0.5, 1.0), // this w coordinate should shift pers
 // the camera is really only useful for calling look at and building the view
 // it has to be translated to a uniform camera for use by the render pipeline
 pub struct Camera {
-  eye: cgmath::Point3<f32>,
-  target: cgmath::Point3<f32>,
-  up: cgmath::Vector3<f32>,
-  aspect: f32,
-  fovy: f32, 
-  znear: f32, 
-  zfar: f32,
+  pub position: Point3<f32>,
+  yaw: Rad<f32>,
+  pitch: Rad<f32>,
 }
 
 // lets just have all the information all at once
 impl Camera {
-    pub fn new( height: f32, width: f32) -> Self {
+    pub fn new<V: Into<Point3<f32>>, Y: Into<Rad<f32>>, P: Into<Rad<f32>>> 
+        (position: V, yaw: Y, pitch: P) -> Self {
         Self {
-            eye:(0.4, 0.4, -0.2).into(), // look from where? 
-            target: (0.0,0.0,0.0).into(), // default: look at the origin
-            up: cgmath::Vector3::unit_y(), // y axis is up
-            aspect: width as f32/ height as f32, // aspect ratio
-            fovy: 45.0, // consider a 2mp with a 45deg fov
-            znear: 0.1,
-            zfar: 100.0,
+            position: position.into(),
+            yaw: yaw.into(),
+            pitch: pitch.into(),
     }
 }
 
     // return the world
-    pub fn build_view_projection_matrix(&self) -> cgmath::Matrix4<f32> {
-    // orients the camera to look at the target from the position of the eye, with up defining the
-    // vertical position
-    
-      let view = cgmath::Matrix4::look_at_rh(self.eye, self.target, self.up);
-      let projection = cgmath::perspective(cgmath::Deg(self.fovy), self.aspect, self.znear, self.zfar);
-    
-      // normalize the cgmath matrix to OpenGL bounds
-      return OPENGL_TO_WGPU * projection * view; 
+    pub fn calc_matrix(&self) -> cgmath::Matrix4<f32> {
+        // destructure elements for use 
+        let (sin_pitch, cos_pitch) = self.pitch.0.sin_cos();
+        let (sin_yaw, cos_yaw) = self.yaw.0.sin_cos(); 
+
+        Matrix4::look_to_rh(
+            self.position, // from position
+            Vector3::new(
+                cos_pitch * cos_yaw, // Some(point) defined on a sphere 
+                sin_pitch, 
+                cos_pitch * sin_yaw
+            ).normalize(),
+            Vector3::unit_y(), // up
+        )
     }
 
 }
+
+pub struct Projection {
+    aspect: f32, 
+    fovy: Rad<f32>,
+    znear: f32,
+    zfar: f32,
+}
+
+impl Projection { 
+    pub fn new<F: Into<Rad<f32>>>(
+        width: u32, 
+        height: u32, 
+        fovy: F, 
+        znear: f32, 
+        zfar: f32,
+    ) -> Self { 
+        Self {
+            aspect : width as f32 / height as f32, 
+            fovy: fovy.into(),
+            znear,
+            zfar,
+        }
+    }
+
+    pub fn resize(&mut self, width: u32, height: u32) {
+        self.aspect = width as f32 / height as f32;
+    }
+
+    pub fn calc_matrix(&self) -> Matrix4<f32> {
+        OPENGL_TO_WGPU * perspective(self.fovy, self.aspect, self.znear, self.zfar)
+    }
+}
+
 
 // we will create a camera uniform - a uniform means that this data will be available to to every
 // shader invocation...is this like a global variable? idk
@@ -66,11 +101,10 @@ impl CameraUniform {
         }
     }
     
-    // here we calculate some values and then organize them in a way that the shaders can use them
-    //
-    pub fn update_view_projection(&mut self, camera: &Camera) {
-        self.view_pos = camera.eye.to_homogeneous().into();
-        self.view_proj = camera.build_view_projection_matrix().into();
+    pub fn update_view_projection(&mut self, camera: &Camera, projection: &Projection) {
+        self.view_pos = camera.position.to_homogeneous().into();
+        self.view_proj = (projection.calc_matrix() * camera.calc_matrix()).into();
+        //println!(" the view projection has been updated to {:?}", self.view_proj);
     }
 }
 // like a pause menu
@@ -78,27 +112,35 @@ impl CameraUniform {
 
 // this will only handle operations on an existing camera struct
 pub struct CameraController {
+    amount_left: f32, 
+    amount_right : f32, 
+    amount_forward: f32, 
+    amount_backward: f32, 
+    amount_up: f32, 
+    amount_down: f32,
+    rotate_horizontal: f32, 
+    rotate_vertical: f32, 
+    scroll: f32, 
     speed: f32,
-    ahead_pressed: bool,
-    back_pressed: bool,
-    left_pressed: bool,
-    right_pressed: bool,
-    x_rotating: bool,
-    y_rotating: bool,
-    }
+    sensitivity: f32,
+}
 
 impl CameraController {
-    pub fn new (magnitude: f32) -> Self {
+    pub fn new(speed: f32, sensitivity: f32) -> Self {
         Self {
-            speed: magnitude,
-            ahead_pressed: false, 
-            back_pressed: false, 
-            left_pressed: false,
-            right_pressed: false,
-            x_rotating: false,
-            y_rotating: false,
-        }
-    }
+        amount_left: 0.0, 
+        amount_right : 0.0, 
+        amount_forward: 0.0, 
+        amount_backward: 0.0, 
+        amount_up: 0.0, 
+        amount_down: 0.0,
+        rotate_horizontal: 0.0, 
+        rotate_vertical: 0.0, 
+        scroll: 0.0, 
+        speed,
+        sensitivity,
+    }           
+}
 
     pub fn handle_mouse(&mut self, delta: (f64, f64)) -> bool {
         // I want to return a bool to track if the mouse is moving for debug stuff
@@ -113,7 +155,9 @@ impl CameraController {
         match (delta.0, delta.1) {
             (0.0,0.0) => {false},
             _ => {
-                println!("dx is {}, and dy is {}", delta.0, delta.1);
+                //println!("dx is {}, and dy is {}", delta.0, delta.1);
+                self.rotate_horizontal = delta.0 as f32;
+                self.rotate_vertical = delta.1 as f32;
                 true
             }
         }
@@ -121,81 +165,81 @@ impl CameraController {
 
     // this returns a bool so we can keep track of whether or not we are pressed in state
     pub fn handle_key(&mut self, key: KeyCode, pressed: bool) -> bool {
-        match key {
+        let mut amount = 0.0;
+        if pressed {amount = 1.0;} else {amount = 0.0;}
+            match key {
             KeyCode::KeyW => {
-            self.ahead_pressed = true;
+            self.amount_forward = amount;
+            //println!("{}", self.amount_forward);
             true
             },
             KeyCode::KeyA => {
-            self.left_pressed = true;
+            self.amount_left = amount;
             true
             },
             KeyCode::KeyS => {
-             self.back_pressed = true;
+             self.amount_backward = amount;
              true
             },
             KeyCode::KeyD => {
-             self.right_pressed = true;
+             self.amount_right = amount;
              true
-            } ,
+            },
+            KeyCode::Space => {
+             self.amount_up = amount;
+             true
+            },
+            KeyCode::ShiftLeft => {
+             self.amount_down = amount;
+             true
+            },
             _ => { false }
+            }
         }
-
-    }
-
-    // wanting to have fps mouse input so 
-    /*
-    pub fn handle_mouse(&mut self, camera: &mut Camera) {
-        match mouse
-    } */
 
     // do some operation on the camera when an input is received
     // speed in setup in main
-    pub fn update_camera(&mut self, camera: &mut Camera) {
-        use cgmath::InnerSpace;
-        let forward = camera.target - camera.eye;
-        let forward_norm = forward.normalize();
-        let forward_mag = forward.magnitude();
+    pub fn update_camera(&mut self, camera: &mut Camera, dt: Duration){ 
+        let dt = dt.as_secs_f32();
+
+        let (yaw_sin, yaw_cos) = camera.yaw.0.sin_cos();
+        let forward = Vector3::new(yaw_cos, 0.0, yaw_sin).normalize();
+        let right = Vector3::new(-yaw_sin, 0.0, yaw_cos).normalize();
+        // sorta build a movement matrix from the input and apply that to position 
+        // instead of a bunch of if statements that move one axis at once
+        camera.position += forward  * (self.amount_forward - self.amount_backward) * self.speed; 
+        camera.position += right * (self.amount_right - self.amount_left) * self.speed; 
         
-        // I must now figure out why motion state does not reset each frame.
-        // it needs to reset each frame to handle when there is no motion
+        // stuff for zooming, not sure I care for now
+        let(pitch_sin, pitch_cos) = camera.pitch.0.sin_cos();
+        let scrollward = Vector3::new(pitch_cos * yaw_cos, pitch_sin, pitch_cos * yaw_sin).normalize();
+        camera.position += scrollward * self.scroll * self.speed * self.sensitivity;
+        
+        self.scroll = 0.0;
 
-        // some extra logic that is supposed to normalize the camera, this will need to be refined
-        // greatly
-        if self.ahead_pressed && forward_mag > self.speed {
-            camera.eye += forward_norm * self.speed;
-            self.ahead_pressed = false; 
-            println!("ahead");
+        camera.position.y += (self.amount_up - self.amount_down) * self.speed; 
+        
+        camera.yaw += Rad(self.rotate_horizontal) * self.sensitivity; 
+        camera.pitch += Rad(-self.rotate_vertical) * self.sensitivity; 
 
+        //println!("{:?}", camera.position);
+        // stop idle rotation
+        self.rotate_horizontal = 0.0;
+        self.rotate_vertical = 0.0;
+        /* 
+        self.amount_forward = 0.0;
+        self.amount_backward = 0.0;
+        self.amount_left = 0.0;
+        self.amount_right = 0.0;
+        self.amount_up = 0.0;
+        self.amount_down = 0.0;
+        */
+        // stop weird behavior from rotational limitation
+        if camera.pitch < -Rad(SAFE_PI) { 
+            camera.pitch = -Rad(SAFE_PI);
+        } else if camera.pitch > Rad(SAFE_PI) {
+            camera.pitch = Rad(SAFE_PI);
         }
 
-        if self.back_pressed {
-            camera.eye -= forward_norm * self.speed;
-            self.back_pressed = false;
-            println!("back");
-        }
+}}
 
-        // right is expressed as the cross product of the y axis and the forward normal. why?
-        // right now I can only press one button at a time, I wonder why
-        let right = forward_norm.cross(camera.up);
-    
-        if self.right_pressed {
-            camera.eye.x -= 0.4 * self.speed;
-            camera.target.x -= 0.4 * self.speed;
-            self.right_pressed = false; 
-        }
-        if self.left_pressed {
-            camera.eye.x += 0.4 * self.speed;
-            camera.target.x += 0.4 * self.speed;
-            self.left_pressed = false;
-        }
-        if self.x_rotating { 
-            camera.target.x += self.speed;
-        }
-
-        if self.y_rotating {
-            camera.target.y += self.speed; 
-        }
-
-    }
-}

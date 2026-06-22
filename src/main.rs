@@ -9,6 +9,7 @@ use winit::{
 use wgpu::util::DeviceExt;
 use cgmath::prelude::*;
 use model::{Vertex,DrawModel};
+use std::time::{Instant, Duration};
 
 mod RPI;
 mod texture;
@@ -54,6 +55,7 @@ pub struct State {
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     camera_controller: camera::CameraController,
+    projection: camera::Projection,
     instances: Vec<Instance>,
     instance_buffer: wgpu::Buffer,
     depth_texture: texture::Texture,
@@ -179,12 +181,22 @@ impl ApplicationHandler<State> for App {
             Some(state) => state,
             None => return,
             };
+        
+        let mut last_frame_time = Instant::now();
 
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => state.resize(size.width, size.height),
             WindowEvent::RedrawRequested => {
-                state.update();
+                // redraw things with respect to time instead of frame
+                // when a redraw is requested, mark down time
+                // redraw -> mark 'last time' 
+                // the difference will be dt and that will smooth things (I hope)
+                let frame_time = Instant::now();
+                let dt = frame_time - last_frame_time; 
+                last_frame_time = frame_time;
+                state.update(dt);
+               
                 match state.render() { 
                     Ok(_) => {}
                     Err(e) => {
@@ -231,7 +243,7 @@ impl App {
 
 impl State { 
     
-    fn update(&mut self) {
+    fn update(&mut self, dt:Duration) {
         // camera will need to be redrawn here every time
 
         let old_position : cgmath::Vector3<_> = self.light_uniform.position.into();
@@ -244,10 +256,10 @@ impl State {
         // then update the projection
         // and render it
         if self.is_pressed {
-            self.camera_controller.update_camera(&mut self.camera); 
+            self.camera_controller.update_camera(&mut self.camera, dt); 
         }
 
-        self.camera_uniform.update_view_projection(&mut self.camera);
+        self.camera_uniform.update_view_projection(&mut self.camera, &mut self.projection);
         self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[self.camera_uniform]));
     }
     
@@ -356,10 +368,11 @@ impl State {
             .await
             .unwrap();
 
-        let camera = camera::Camera::new(config.height as f32, config.width as f32);
+        let camera = camera::Camera::new((0.0,2.0,0.0), cgmath::Deg(-60.0), cgmath::Deg(-30.0));
+        let projection = camera::Projection::new(config.width, config.height, cgmath::Deg(45.0), 0.1, 100.0);
 
         let mut camera_uniform = camera::CameraUniform::new();
-        camera_uniform.update_view_projection(&camera); // default
+        camera_uniform.update_view_projection(&camera, &projection); // default
 
         let camera_buffer = device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
@@ -424,7 +437,7 @@ impl State {
             label: Some("camera_bind_group"),
         });
 
-        let camera_controller = camera::CameraController::new(0.2);
+        let camera_controller = camera::CameraController::new(0.4,0.006);
 
         let shader = wgpu::ShaderModuleDescriptor{
                         label: Some("Shader"),
@@ -534,7 +547,8 @@ impl State {
             camera_uniform, 
             camera_buffer,
             camera_bind_group, 
-            camera_controller, 
+            camera_controller,
+            projection,
             instances, 
             instance_buffer, 
             depth_texture,
@@ -569,7 +583,7 @@ impl State {
             self.surface.configure(&self.device, &self.config);
             self.is_surface_configured = true;
             self.depth_texture = texture::Texture::create_depth_texture(&self.device, &self.config, "depth_texture");
-            
+            self.projection.resize(width,height);
         }
     }
 
