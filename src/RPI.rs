@@ -7,6 +7,7 @@ pub fn create_render_pipeline(
     depth_format: Option<wgpu::TextureFormat>,
     vertex_layouts: &[wgpu::VertexBufferLayout],
     shader: wgpu::ShaderModuleDescriptor,
+    topology: wgpu::PrimitiveTopology,
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(shader);
     
@@ -34,7 +35,7 @@ pub fn create_render_pipeline(
 }),
 primitive: wgpu::PrimitiveState {
     conservative: false,
-    topology: wgpu::PrimitiveTopology::TriangleList,
+    topology,
     strip_index_format: None, 
     front_face: wgpu::FrontFace::Ccw,
     cull_mode: Some(wgpu::Face::Back),
@@ -44,7 +45,7 @@ primitive: wgpu::PrimitiveState {
 depth_stencil: depth_format.map(|format| wgpu::DepthStencilState {
     format,
     depth_write_enabled: Some(true),
-    depth_compare: Some(wgpu::CompareFunction::Less),
+    depth_compare: Some(wgpu::CompareFunction::LessEqual),
     stencil: wgpu::StencilState::default(),
     bias: wgpu::DepthBiasState::default(),
 }),

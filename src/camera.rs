@@ -89,7 +89,10 @@ impl Projection {
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]// allows buffer allocation of x
 pub struct CameraUniform {
     view_pos: [f32;4],
-    view_proj: [[f32;4];4] // 4 4 element matrices within one matrix.
+    view_proj: [[f32;4];4], // 4 4 element matrices within one matrix.
+    view: [[f32;4];4],
+    inv_proj: [[f32;4];4],
+    inv_view: [[f32;4];4],
     }
 
 impl CameraUniform {
@@ -98,12 +101,22 @@ impl CameraUniform {
         Self { 
             view_pos: [0.0;4],
             view_proj: cgmath::Matrix4::identity().into(),
+            view: cgmath::Matrix4::identity().into(),
+            inv_proj: cgmath::Matrix4::identity().into(),
+            inv_view: cgmath::Matrix4::identity().into(),
         }
     }
     
     pub fn update_view_projection(&mut self, camera: &Camera, projection: &Projection) {
         self.view_pos = camera.position.to_homogeneous().into();
-        self.view_proj = (projection.calc_matrix() * camera.calc_matrix()).into();
+        let proj = projection.calc_matrix();
+        let view = camera.calc_matrix();
+        let view_proj = proj * view;
+        self.view_proj = view_proj.into();
+        self.view = view.into();
+        self.inv_proj = proj.invert().unwrap().into();
+        self.inv_view = view.transpose().into();
+
         //println!(" the view projection has been updated to {:?}", self.view_proj);
     }
 }

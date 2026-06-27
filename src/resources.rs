@@ -1,6 +1,7 @@
 use std::io::{BufReader, Cursor};
 use wgpu::util::DeviceExt;
 use crate::{model,texture};
+use image::codecs::hdr::HdrDecoder;
 
 pub struct HdrLoader {
     texture_format: wgpu::TextureFormat,
@@ -10,12 +11,14 @@ pub struct HdrLoader {
 
 impl HdrLoader {
     pub fn new(device: &wgpu::Device) -> Self {
-        let module = device.create_shader_module(wgpu::inlude_wgsl!("equirectangular.wgsl"));
+        let module = device.create_shader_module(wgpu::include_wgsl!("equirectangular.wgsl"));
+        
         let texture_format = wgpu::TextureFormat::Rgba32Float;
-        equirect_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        
+        let equirect_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("HdrLoader::equirect_layout"),
-            entrier: &[
-                wgpu::BindGroupLayotuEntry {
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Texture {
@@ -26,7 +29,7 @@ impl HdrLoader {
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
-                    binding: 0,
+                    binding: 1,
                     visibility: wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::StorageTexture {
                         access: wgpu::StorageTextureAccess::WriteOnly,
@@ -76,7 +79,7 @@ impl HdrLoader {
             hdr_decoder.read_image_transform(
                 |pix| {
                     let rgb = pix.to_hdr();
-                    [rbg.0[0], rgb.0[1], rbg.0[2], 1.0f32]
+                    [rgb.0[0], rgb.0[1], rgb.0[2], 1.0f32]
                 },
                 &mut pixels[..],
             )?;
@@ -94,16 +97,16 @@ impl HdrLoader {
         );
 
         queue.write_texture(
-            wgpu::TexelCopyTexureInfo {
+            wgpu::TexelCopyTextureInfo {
                 texture: &src.texture, 
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &bytemuck::case_slice(&pixels),
-            egpu::TexelCopyBufferLayout {
+            &bytemuck::cast_slice(&pixels),
+            wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                byter_per_row: Some(src.size.width * std::mem::size_of::<[f32; 4]>() as u32),
+                bytes_per_row: Some(src.size.width * std::mem::size_of::<[f32; 4]>() as u32),
                 rows_per_image: Some(src.size.height),
             },
             src.size,
@@ -113,14 +116,14 @@ impl HdrLoader {
             device,
             dst_size,
             dst_size,
-            self.texture_Format,
+            self.texture_format,
             1,
-            wgpu::TextureUsges::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+            wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
             wgpu::FilterMode::Nearest,
             label,
         );
 
-        let dst_view = dst.texture().create_view(&wgpu::TextureViewDescripor { 
+        let dst_view = dst.texture().create_view(&wgpu::TextureViewDescriptor { 
             label,
             dimension: Some(wgpu::TextureViewDimension::D2Array),
             ..Default::default()
@@ -136,19 +139,19 @@ impl HdrLoader {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&dst.view),
+                    resource: wgpu::BindingResource::TextureView(&dst_view),
                 },
             ],
         });
 
-        let mut encoder = device.create_command_encoder(&defult::default());
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label });
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label, timestamp_writes: None, });
 
-        let num workgroups = (dst_size + 15) / 16;
+        let num_workgroups = (dst_size + 15) / 16;
 
         pass.set_pipeline(&self.equirect_to_cubemap);
         pass.set_bind_group(0, &bind_group, &[]);
-        pass.dispatch_workgrous(num_workgroups, num_workgroups, 6);
+        pass.dispatch_workgroups(num_workgroups, num_workgroups, 6);
 
         drop(pass); //what?
 
@@ -182,7 +185,7 @@ pub async fn load_texture(
     queue: &wgpu::Queue,
 ) -> anyhow::Result<texture::Texture> {
     let data = load_binary(file_name).await?;
-    texture::Texture::from_bytes(device, queue, &data, file_name)
+    texture::Texture::from_bytes(device, queue, &data, file_name, false)
 }
 
 pub async fn load_model(
