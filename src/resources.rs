@@ -1,3 +1,6 @@
+// the purpose of this file is to just seperate some of the loading operation and data processing that is necessary to get some objects loaded
+// it is used in heavy conjundtion with model.rs. 
+
 use std::io::{BufReader, Cursor};
 use wgpu::util::DeviceExt;
 use crate::{model,texture};
@@ -160,7 +163,8 @@ impl HdrLoader {
     }
 }
 
-
+// these two functions are called in main. 
+// all texture related items are to be stored in res/ so instead of having to write the explicit path each time we can just append it, then read the appended string. 
 pub async fn load_string(file_name: &str) -> anyhow::Result<String> {
     let txt = {
         let path = std::path::Path::new(env!("OUT_DIR"))
@@ -179,6 +183,9 @@ pub async fn load_binary(file_name: &str) -> anyhow::Result<Vec<u8>> {
     Ok(data)
 }
 
+// literally just loads textures
+// we use load binary because the data loading is done with image library
+// this library takes some bytes and handles the loading of it into memory for me
 pub async fn load_texture(
     file_name: &str,
     device: &wgpu::Device,
@@ -188,6 +195,7 @@ pub async fn load_texture(
     texture::Texture::from_bytes(device, queue, &data, file_name, false)
 }
 
+// load an entire model 
 pub async fn load_model(
     file_name: &str,
     device: &wgpu::Device,
@@ -195,25 +203,37 @@ pub async fn load_model(
     layout: &wgpu::BindGroupLayout,
 ) -> anyhow::Result<model::Model> {
     let obj_text = load_string(file_name).await?;
+    // so a cursor is used anywhere where IO needs to happen
+    // cursor will wrap this Path<string> implement Read, Write, and Seek for it
+    // Seek - allows a 'cursor' to seek to a certain offset 
     let obj_cursor = Cursor::new(obj_text);
+    // this buffer reader allows me to save this 'large' amount of data in memory so I can access it a lot
+    // without some massive performance hit. 
     let mut obj_reader = BufReader::new(obj_cursor);
-    
+
+    // this tobj method is used to load the various meshes
+    // it takes a reader, load options, and a mesh loader 
+    // returns LoadResult::Ok(Vec<Model>, Result(Vec<Material>, LoadError)) <- this is here we get the tuple destructuring ability from
     let (models, obj_materials) = 
         tobj::load_obj_buf_async(
-        &mut obj_reader,
-        &tobj::LoadOptions{
-            triangulate: true,
-            single_index: true,
-            ..Default::default()},
-        |p| async move {
-            let mat_text = load_string(&p).await.unwrap();
-            tobj::load_mtl_buf(&mut BufReader::new(Cursor::new(mat_text)))
-        },
-    )
-        .await?;
+            &mut obj_reader,
+            &tobj::LoadOptions{
+                triangulate: true,
+                single_index: true,
+                ..Default::default()
+            },
+            |p| async move {
+                let mat_text = load_string(&p).await.unwrap();
+                tobj::load_mtl_buf(&mut BufReader::new(Cursor::new(mat_text))) // to be saved as 'p' and passed to tobj.
+            },
+        ).await?;
 
 
 let mut materials = Vec::new();
+
+// for every object in the materials from tobj loader get the diffuse and normal texture
+// save the material for each instance in the Materials vector
+    // TOTO: Understand the rest of this file, then onto the next. 
 for m in obj_materials? {
     let diffuse_texture = load_texture(&m.diffuse_texture.unwrap(), device, queue).await?;
     let normal_texture = load_texture(&m.normal_texture.unwrap(), device, queue).await?;
@@ -226,7 +246,7 @@ for m in obj_materials? {
     ));
 }
 
-let meshes = models
+let meshes = models // models is a vector. turn to iter and map positions
     .into_iter()
     .map(|m| {
         let mut vertices = (0..m.mesh.positions.len() / 3) // triangles
