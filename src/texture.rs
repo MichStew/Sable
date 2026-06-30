@@ -13,6 +13,7 @@ impl Texture {
     pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
     pub fn create_depth_texture(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration, label: &str) -> Self {
+        // determines the amount of space to allocate for the texture and its operations
         let size = wgpu::Extent3d {
             width: config.width.max(1),
             height: config.height.max(1),
@@ -88,6 +89,7 @@ impl Texture {
                 depth_or_array_layers: 1,
                 };
 
+            // create a texture. Textures contain a view, texture, sampler, and size.
             let texture = Self::create_2d_texture(
                 device,
                 size.width,
@@ -98,6 +100,7 @@ impl Texture {
                 label,
             );
 
+            // once we have the texture we c
             queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     aspect: wgpu::TextureAspect::All,
@@ -108,7 +111,7 @@ impl Texture {
                 &rgba,
                 wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(4 * dimensions.0),
+                    bytes_per_row: Some(4 * dimensions.0), // view, texture, sampler, size. 
                     rows_per_image: Some(dimensions.1),
                 },
                 size,
@@ -117,6 +120,7 @@ impl Texture {
             Ok(texture)
         }
 
+    // this can be called from anywhere in my codebase
     pub(crate) fn create_2d_texture(
         device: &wgpu::Device,
         width: u32, 
@@ -206,7 +210,7 @@ impl CubeTexture {
             size: wgpu::Extent3d {
                 width,
                 height, 
-                depth_or_array_layers: 6,
+                depth_or_array_layers: 6, // there are 6 faces on a cube, it is important to have this in the size for operations on this cube
             }, 
             mip_level_count,
             sample_count: 1,
@@ -219,7 +223,7 @@ impl CubeTexture {
         let view = texture.create_view(&wgpu::TextureViewDescriptor {
             label,
             dimension: Some(wgpu::TextureViewDimension::Cube),
-            array_layer_count: Some(6),
+            array_layer_count: Some(6), // the faces again
             ..Default::default()
         });
         
@@ -239,7 +243,8 @@ impl CubeTexture {
             view,
         }
     }
-    
+
+    // signatures across the codebase 
     pub fn texture(&self) -> &wgpu::Texture {&self.texture}
     
     pub fn view(&self) -> &wgpu::TextureView {&self.view}
