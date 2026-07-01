@@ -33,21 +33,21 @@ impl HdrPipeline {
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
                     visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture,
+                    ty: wgpu::BindingType::Texture{
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
                         view_dimension: wgpu::TextureViewDimension::D2,
                         multisampled: false,
                     },
-                    count: None,
+                    count: None, 
                 },
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
-                },
-            ],
+                },],
         });
+        
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Hdr::bind_group"),
             layout: &layout,
@@ -102,6 +102,7 @@ impl HdrPipeline {
             wgpu::FilterMode::Nearest,
             Some("Hdr::texture"),
         );
+
         self.bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Hdr::bind_group"),
             layout: &self.layout,

@@ -23,5 +23,5 @@ glob="0.3"
 [dependencies.image]
 version = "0.24"
 default-features = false
-features = ["png", "jpeg"]
+features = ["png", "jpeg", "hdr"]
 
