@@ -78,7 +78,7 @@ impl Projection {
     }
 
     pub fn calc_matrix(&self) -> Matrix4<f32> {
-        OPENGL_TO_WGPU * perspective(self.fovy, self.aspect, self.znear, self.zfar)
+        perspective(self.fovy, self.aspect, self.znear, self.zfar)
     }
 }
 
@@ -89,8 +89,8 @@ impl Projection {
 #[derive(Debug, Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]// allows buffer allocation of x
 pub struct CameraUniform {
     view_pos: [f32;4],
-    view_proj: [[f32;4];4], // 4 4 element matrices within one matrix.
-    view: [[f32;4];4],
+    view: [[f32;4];4], // 4 4 element matrices within one matrix.
+    view_proj: [[f32;4];4],
     inv_proj: [[f32;4];4],
     inv_view: [[f32;4];4],
     }

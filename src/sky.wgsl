@@ -1,3 +1,6 @@
+// shader does indeed expect 320 from the camera
+// but it in not getting 320, its getting 272
+// lets go track down this mismatch
 struct Camera {
   view_pos: vec4<f32>,
   view: mat4x4<f32>,
@@ -30,7 +33,7 @@ fn vs_main(
      ));
      var out: VertexOutput; 
      out.clip_position = vec4(uv * 4.0 - 1.0, 1.0, 1.0);
-     out.frag_position = vec4(uv * 4.0 - 1.0, 1.0, 1.0);
+     out.frag_position = out.clip_position;
      return out;
 }
 

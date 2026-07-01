@@ -6,9 +6,7 @@ struct Face {
     right: vec3<f32>,
 }
 
-@group(0)
-@binding(0)
-var src: texture_2d<f32>;
+@group(0) @binding(0) var src: texture_2d<f32>;
 
 @group(0)
 @binding(1)
