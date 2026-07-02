@@ -100,7 +100,7 @@ impl Instance {
 // so InstanceRaw is a struct of [[f43;4] ;4]. this should be 64 bytes between Vertex Attributes
 // The instance step mode tells the shader to use the next instance when it beigns processing a new
 // instance (as opposed to a vertex?)
-// the first element is at 0. VertexAttribute has
+// the first element is at 0.
 impl InstanceRaw {
     fn desc() -> wgpu::VertexBufferLayout<'static> {
         use std::mem;

@@ -8,9 +8,12 @@ use winit::{
     };
 use wgpu::util::DeviceExt;
 use cgmath::prelude::*;
-use model::{Vertex,DrawModel};
+use model::{Vertex,DrawModel,DrawLight};
 use std::time::{Instant, Duration};
 
+#[allow(unused)]
+
+mod hdr;
 mod RPI;
 mod texture;
 mod model;
@@ -50,7 +53,9 @@ pub struct State {
     is_surface_configured: bool,
     window: Arc<Window>,
     render_pipeline: wgpu::RenderPipeline,
-    
+    hdr: hdr::HdrPipeline,
+    environment_bind_group: wgpu::BindGroup,
+    sky_pipeline: wgpu::RenderPipeline,
     camera: camera::Camera,
     camera_uniform: camera::CameraUniform,
     camera_buffer: wgpu::Buffer,
@@ -292,7 +297,7 @@ impl State {
                 label: Some("3070 for me"),
                 required_features : wgpu::Features::empty(),
                 experimental_features: wgpu::ExperimentalFeatures::disabled(),
-                required_limits: wgpu::Limits::default(),
+                required_limits: wgpu::Limits::downlevel_defaults(),
                 memory_hints: Default::default(),
                 trace: wgpu::Trace::Off,
             }).await?;
@@ -307,22 +312,15 @@ impl State {
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
-            width: size.width,
-            height: size.height,
+            width: size.width.max(1),
+            height: size.height.max(1),
             present_mode: surface_caps.present_modes[0],
             alpha_mode: surface_caps.alpha_modes[0],
-            view_formats: vec![],
+            view_formats: vec![surface_format.add_srgb_suffix()],
             desired_maximum_frame_latency: 2,
         };
     
         // setup config is finished here.
-
-
-        let diffuse_bytes = include_bytes!("happy-tree.png");
-        let diffuse_texture = texture::Texture::from_bytes(&device, &queue, diffuse_bytes, "happy-tree.png").unwrap();
-
-        let depth_texture = texture::Texture::create_depth_texture(&device, &config, "depth_texture");
-
 
         let texture_bind_group_layout = 
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -362,12 +360,6 @@ impl State {
                 ],
                 label: Some("texture_bind_group_layout"),
             });
-
-      
-
-        let obj_model = resources::load_model("cube.obj", &device, &queue, &texture_bind_group_layout)
-            .await
-            .unwrap();
 
         let camera = camera::Camera::new((0.0,2.0,0.0), cgmath::Deg(-60.0), cgmath::Deg(-30.0));
         let projection = camera::Projection::new(config.width, config.height, cgmath::Deg(45.0), 0.1, 100.0);
@@ -438,12 +430,13 @@ impl State {
             label: Some("camera_bind_group"),
         });
 
-        let camera_controller = camera::CameraController::new(0.4,0.006);
+        let obj_model = resources::load_model("cube.obj", &device, &queue, &texture_bind_group_layout)
+            .await
+            .unwrap();
 
-        let shader = wgpu::ShaderModuleDescriptor{
-                        label: Some("Shader"),
-                        source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
-                };
+        let camera_controller = camera::CameraController::new(0.4,0.006);
+      
+        // 16 byte offsets require an extra byte of padding for each of these 1x3 vectors
         let light_uniform = LightUniform {
             position: [2.0, 2.0, 2.0],
             _padding: 0,
@@ -480,7 +473,88 @@ impl State {
             }],
             label: None,
     });
+    
+        let depth_texture = texture::Texture::create_depth_texture(&device, &config, "depth texture");
 
+        let hdr = hdr::HdrPipeline::new(&device, &config);
+        let hdr_loader = resources::HdrLoader::new(&device);
+        let sky_bytes = resources::load_binary("pure-sky.hdr").await?;
+        let sky_texture = hdr_loader.from_equirectangular_bytes(
+              &device,
+              &queue,
+              &sky_bytes,
+              1080,
+              Some("sky texture"),
+        )?;
+        
+        let environment_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("environment_layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float{ filterable: false },
+                        view_dimension: wgpu:: TextureViewDimension::Cube,
+                        multisampled: false,
+                },
+                count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                    count: None,
+                },
+            ],
+        });
+
+        let environment_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("environment_bind_group"),
+            layout: &environment_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&sky_texture.view()),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(sky_texture.sampler()),
+                },
+            ],
+        });
+ 
+        // defines sets of bind group layouts that the pipeline can use, these layouts must be
+        // defined - see texture_bind_group_layout to see how this happens
+        let render_pipeline_layout = 
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { 
+                label: Some("Render Pipeline Layout"),
+                bind_group_layouts: &[
+                    Some(&texture_bind_group_layout),
+                    Some(&camera_bind_group_layout),
+                    Some(&light_bind_group_layout),
+                ],
+                immediate_size: 0,
+            });
+
+       let render_pipeline = {
+            let shader = wgpu::ShaderModuleDescriptor {
+                label: Some("Normal Shader"),
+                source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+            };
+            RPI::create_render_pipeline(
+                &device,
+                &render_pipeline_layout,
+                hdr.format(),
+                Some(texture::Texture::DEPTH_FORMAT),
+                &[model::ModelVertex::desc(), InstanceRaw::desc()],
+                shader,
+                wgpu::PrimitiveTopology::TriangleList,
+            )
+        };
+    
+        // all pipelines must  have the same format... 
+        // hours on errors like this. 
         let light_render_pipeline = {
             let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("light pipeline layout"),
@@ -499,42 +573,33 @@ impl State {
             RPI::create_render_pipeline(
                 &device,
                 &layout,
-                config.format,
+                hdr.format(),
                 Some(texture::Texture::DEPTH_FORMAT),
-            &[model::ModelVertex::desc()],
-            shader,
+                &[model::ModelVertex::desc()],
+                shader,
+                wgpu::PrimitiveTopology::TriangleList,
             )
         };
 
-        // defines sets of bind group layouts that the pipeline can use, these layouts must be
-        // defined - see texture_bind_group_layout to see how this happens
-        let render_pipeline_layout = 
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { 
-                label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[
-                    Some(&texture_bind_group_layout),
-                    Some(&camera_bind_group_layout),
-                    Some(&light_bind_group_layout),
-                ],
+        let sky_pipeline = {
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Sky Pipeline Layout"),
+                bind_group_layouts: &[Some(&camera_bind_group_layout),Some(&environment_layout)],
                 immediate_size: 0,
             });
-
-
-        let render_pipeline = { 
-            let shader = wgpu::ShaderModuleDescriptor {
-                label: Some("Normal Shader"),
-                source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
-            };
-            RPI::create_render_pipeline(
-            &device,
-            &render_pipeline_layout,
-            config.format,
-            Some(texture::Texture::DEPTH_FORMAT),
-            &[model::ModelVertex::desc(), InstanceRaw::desc()],
-            shader,
+        
+            let shader = wgpu::include_wgsl!("sky.wgsl");
+            
+            RPI::create_render_pipeline( 
+                &device,
+                &layout,
+                hdr.format(),
+                Some(texture::Texture::DEPTH_FORMAT),
+                &[],
+                shader,
+                wgpu::PrimitiveTopology::TriangleList,
             )
-    };
-
+        };
         
         Ok(Self {
             surface, 
@@ -543,7 +608,10 @@ impl State {
             config, 
             is_surface_configured: false, 
             window, 
-            render_pipeline,  
+            render_pipeline,
+            hdr,
+            environment_bind_group,
+            sky_pipeline,
             camera, 
             camera_uniform, 
             camera_buffer,
@@ -583,6 +651,7 @@ impl State {
             self.config.height = height;
             self.surface.configure(&self.device, &self.config);
             self.is_surface_configured = true;
+            self.hdr.resize(&self.device, width, height);
             self.depth_texture = texture::Texture::create_depth_texture(&self.device, &self.config, "depth_texture");
             self.projection.resize(width,height);
         }
@@ -632,7 +701,7 @@ impl State {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &view, 
+                        view: self.hdr.view(), 
                         depth_slice: None,
                         resolve_target: None,                         
                         ops: wgpu::Operations {
@@ -659,8 +728,6 @@ impl State {
            
 
 	    render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-
-            use crate::model::DrawLight;
             render_pass.set_pipeline(&self.light_render_pipeline);
             render_pass.draw_light_model(
                 &self.obj_model,
@@ -669,17 +736,21 @@ impl State {
             );
 
             render_pass.set_pipeline(&self.render_pipeline);
-            use model::DrawModel;
-            let mesh = &self.obj_model.meshes[0];
-            let material = &self.obj_model.materials[mesh.material];
             render_pass.draw_model_instanced(
                 &self.obj_model, 
                 0..self.instances.len()as u32, 
                 &self.camera_bind_group,
                 &self.light_bind_group,
+                &self.environment_bind_group,
                 );
-        }
 
+            render_pass.set_pipeline(&self.sky_pipeline);
+            render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            render_pass.set_bind_group(1, &self.environment_bind_group, &[]);
+            render_pass.draw(0..3,0..1);       
+        }
+    
+    self.hdr.process(&mut encoder, &view);
     self.queue.submit(std::iter::once(encoder.finish()));
     output.present();
     
